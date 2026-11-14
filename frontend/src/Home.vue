@@ -1,0 +1,72 @@
+<script setup>
+import { ref, onMounted } from 'vue'
+import { api, LEVELS, MODES, fmtDate } from './api'
+defineEmits(['enter', 'logout'])
+const tab = ref('games'), list = ref([]), master = ref([]), show = ref(false), msg = ref('')
+const f = ref({ name: '', play_date: new Date().toLocaleDateString('en-CA'), mode: 'regular' })
+const np = ref({ id: '', nama: '', initial_level: '' })
+async function load() {
+  list.value = await api('GET', '/sessions'); master.value = await api('GET', '/players')
+  np.value.id = String(Math.max(0, ...master.value.map(p => parseInt(p.id) || 0)) + 1).padStart(4, '0')
+}
+onMounted(() => load().catch(e => (msg.value = e.message)))
+async function create() { await api('POST', '/sessions', f.value); show.value = false; f.value.name = ''; await load() }
+async function del(g) { if (confirm(`Delete "${g.name}" and all its matches?`)) { await api('DELETE', '/sessions/' + g.id); await load() } }
+async function addPlayer() { await api('POST', '/players', np.value); np.value.nama = ''; np.value.initial_level = ''; await load() }
+const saveMaster = p => api('PUT', `/players/${p.id}`, { id: p.id, nama: p.nama, initial_level: p.initial_level || '' })
+async function delMaster(p) { if (confirm(`Delete ${p.nama}?`)) { await api('DELETE', `/players/${p.id}`); await load() } }
+</script>
+<template>
+  <div class="op">
+    <nav>
+      <button :class="{ on: tab === 'games' }" @click="tab = 'games'">Games</button>
+      <button :class="{ on: tab === 'players' }" @click="tab = 'players'">Players</button>
+    </nav>
+    <p v-if="msg" class="msg">{{ msg }}</p>
+    <template v-if="tab === 'games'">
+      <header class="hero">
+        <div><h1>Banting Raket</h1><p class="tag">Play together. Get better.</p></div>
+        <div class="acts"><button class="btn sm" @click="$emit('logout')">Log out</button><button class="btn primary" @click="show = true">+ New game</button></div>
+      </header>
+      <p v-if="!list.length" class="empty">No games yet. Create one to start.</p>
+      <section v-for="g in list" :key="g.id" class="card gcard">
+        <div>
+          <h3>{{ g.name }}</h3>
+          <p><span class="mchip">{{ MODES[g.mode] }}</span>{{ fmtDate(g.play_date) }} · {{ g.players }} players · {{ g.matches }} matches</p>
+        </div>
+        <div class="acts"><button class="btn ghost sm" @click="del(g)">Delete</button><button class="btn primary" @click="$emit('enter', g.id)">Enter →</button></div>
+      </section>
+    </template>
+    <section v-else class="card">
+      <div class="bar"><h2>Master players ({{ master.length }})</h2></div>
+      <form class="add" @submit.prevent="addPlayer">
+        <input v-model="np.id" placeholder="ID" required /><input v-model="np.nama" placeholder="Name" required />
+        <select v-model="np.initial_level"><option value="">No level</option><option v-for="l in LEVELS" :key="l">{{ l }}</option></select>
+        <button class="btn primary">Add player</button>
+      </form>
+      <table class="tbl">
+        <thead><tr><th>ID</th><th>Nama</th><th>Level</th><th></th></tr></thead>
+        <tbody><tr v-for="p in master" :key="p.id">
+          <td data-l="ID">{{ p.id }}</td>
+          <td data-l="Nama"><input v-model="p.nama" @change="saveMaster(p)" /></td>
+          <td data-l="Level"><select v-model="p.initial_level" @change="saveMaster(p)"><option :value="null">-</option><option v-for="l in LEVELS" :key="l">{{ l }}</option></select></td>
+          <td><button class="btn ghost sm" @click="delMaster(p)">Delete</button></td>
+        </tr></tbody>
+      </table>
+    </section>
+    <div v-if="show" class="modal" @click.self="show = false">
+      <form @submit.prevent="create">
+        <h2>New game</h2>
+        <label>Name<input v-model="f.name" placeholder="e.g. Open Play Sabtu" required /></label>
+        <label>Date<input type="date" v-model="f.play_date" required /></label>
+        <label>System
+          <select v-model="f.mode"><option v-for="(l, k) in MODES" :key="k" :value="k">{{ l }}</option></select>
+        </label>
+        <p class="empty" style="margin:0">
+          {{ f.mode === 'regular' ? 'Matches by level and fewest games. Ranked by wins.' : f.mode === 'team' ? 'Two groups of doubles teams (mixed, women, men). Group vs group, ranked by team and by group.' : 'Partners rotate every round. Ranked by total points scored.' }}
+        </p>
+        <div class="acts"><button type="button" class="btn" @click="show = false">Cancel</button><button class="btn primary">Create</button></div>
+      </form>
+    </div>
+  </div>
+</template>
