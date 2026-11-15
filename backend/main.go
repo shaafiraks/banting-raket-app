@@ -197,10 +197,11 @@ func main() {
 			Players []string `json:"players"`
 			Score1  int      `json:"score1"`
 			Score2  int      `json:"score2"`
+			Minutes int      `json:"minutes"`
 		}](r)
 		if err != nil || len(b.Players) != 4 { http.Error(w, "bad request", 400); return }
-		do(w, `INSERT INTO matches(session_id,court,score1,score2,p1,p2,p3,p4,finished_at) VALUES($1,0,$2,$3,$4,$5,$6,$7,now())`,
-			sidOf(r), b.Score1, b.Score2, b.Players[0], b.Players[1], b.Players[2], b.Players[3])
+		do(w, `INSERT INTO matches(session_id,court,score1,score2,p1,p2,p3,p4,finished_at,duration_min) VALUES($1,0,$2,$3,$4,$5,$6,$7,now(),NULLIF($8,0))`,
+			sidOf(r), b.Score1, b.Score2, b.Players[0], b.Players[1], b.Players[2], b.Players[3], b.Minutes)
 	})
 	// ---- teams (team group mode)
 	m.HandleFunc("GET /api/sessions/{sid}/teams", func(w http.ResponseWriter, r *http.Request) {
@@ -275,11 +276,11 @@ func main() {
 		rowsOf(`SELECT sp.player_id,COALESCE(p.nama,sp.guest_name,sp.player_id) FROM session_players sp LEFT JOIN players p ON p.id=sp.player_id WHERE sp.session_id=$1`,
 			func(rs *sql.Rows) any { var a, b string; rs.Scan(&a, &b); names[a] = b; return nil }, sid)
 		nm := func(id string) string { if n, ok := names[id]; ok { return n }; return id }
-		res := rowsOf(`SELECT p1,p2,p3,p4,score1,score2 FROM matches WHERE session_id=$1 AND finished_at IS NOT NULL ORDER BY id`, func(rs *sql.Rows) any {
+		res := rowsOf(`SELECT p1,p2,p3,p4,score1,score2,COALESCE(duration_min,0) FROM matches WHERE session_id=$1 AND finished_at IS NOT NULL ORDER BY id`, func(rs *sql.Rows) any {
 			var a, b, c, e string
-			var s1, s2 int
-			rs.Scan(&a, &b, &c, &e, &s1, &s2)
-			return map[string]any{"t1": []string{nm(a), nm(b)}, "t2": []string{nm(c), nm(e)}, "s1": s1, "s2": s2}
+			var s1, s2, mn int
+			rs.Scan(&a, &b, &c, &e, &s1, &s2, &mn)
+			return map[string]any{"t1": []string{nm(a), nm(b)}, "t2": []string{nm(c), nm(e)}, "s1": s1, "s2": s2, "min": mn}
 		}, sid)
 		tm := rowsOf(`SELECT p1,p2,grp,category FROM teams WHERE session_id=$1 ORDER BY id`, func(rs *sql.Rows) any {
 			var a, b, c string

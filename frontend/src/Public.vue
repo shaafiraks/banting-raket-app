@@ -2,22 +2,23 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { MODES, fmtDate } from './api'
 const props = defineProps({ token: String })
-const d = ref(null), err = ref(''), tab = ref('matches'); let timer
+const d = ref(null), err = ref(''), tab = ref('matches'), now = ref(Date.now()); let timer, t2
 async function load() {
   try { const r = await fetch('/api/public/' + props.token); if (!r.ok) throw new Error('This link is not available (anymore).'); d.value = await r.json(); err.value = '' }
   catch (e) { err.value = e.message }
 }
-onMounted(() => { load(); timer = setInterval(load, 15000) }) // refreshes by itself
-onUnmounted(() => clearInterval(timer))
+onMounted(() => { load(); timer = setInterval(load, 8000); t2 = setInterval(() => (now.value = Date.now()), 20000) }) // refreshes by itself
+onUnmounted(() => { clearInterval(timer); clearInterval(t2) })
 const live = computed(() => d.value?.live || {})
+const playing = computed(() => (live.value.playing || []).filter(m => m && m.t1))
+const next = computed(() => (live.value.next || []).filter(m => m && m.t1))
+const avg = computed(() => live.value.avg || 20), courts = computed(() => live.value.courts || 1)
 const results = computed(() => (d.value?.results || []).map((r, i) => ({ ...r, n: i + 1 })).reverse())
-const cards = computed(() => [
-  ...(live.value.playing || []).map(m => ({ k: 'play', badge: 'NOW PLAYING', t1: m[0], t2: m[1] })),
-  ...(live.value.next || []).map((m, i) => ({ k: 'next', badge: `UP NEXT · ${i + 1}`, t1: m[0], t2: m[1] })),
-  ...results.value.map(r => ({ ...r, k: 'done', badge: `MATCH ${r.n}` })),
-])
-const titles = { play: 'Now playing', next: 'Up next', done: 'Results' }
-const cls = (c, side) => (c.k === 'done' ? ((side === 1 ? c.s1 > c.s2 : c.s2 > c.s1) ? 'win' : 'lose') : '')
+const mins = m => (m.at ? Math.max(0, Math.floor((now.value - m.at) / 60000)) : 0)
+const lead = m => (m.s1 > m.s2 ? 1 : m.s2 > m.s1 ? 2 : 0)
+const est = i => { const free = courts.value - playing.value.length; return free >= i + 1 ? 0 : Math.ceil((i + 1 - Math.max(0, free)) / courts.value) * avg.value }
+const ord = n => ['1st', '2nd', '3rd'][n - 1] || n + 'th'
+const win = (r, side) => (side === 1 ? r.s1 > r.s2 : r.s2 > r.s1)
 const sortBy = k => (a, b) => b[k] - a[k] || b.diff - a.diff || a.games - b.games
 const board = computed(() => {
   const rs = d.value?.results || [], mode = d.value?.mode, t = {}
@@ -50,16 +51,40 @@ const gt = computed(() => [1, 2].map(g => board.value.filter(x => x.grp === g).r
         <div><h1>{{ d.name }}</h1><p class="tag"><span class="mchip">{{ MODES[d.mode] }}</span>{{ fmtDate(d.play_date) }}</p></div>
       </header>
       <template v-if="tab === 'matches'">
-        <p v-if="!cards.length" class="empty">No matches yet. This page updates by itself.</p>
-        <template v-for="(c, i) in cards" :key="c.k + i">
-          <h3 v-if="!i || cards[i - 1].k !== c.k" class="sec">{{ titles[c.k] }}</h3>
-          <article class="pcard">
-            <header><span class="badge" :class="c.k">{{ c.badge }}</span></header>
-            <div class="prow" :class="cls(c, 1)"><div><span v-for="(n, j) in c.t1" :key="j">{{ n }}</span></div><b v-if="c.k === 'done'">{{ c.s1 }}</b></div>
-            <div class="prow" :class="cls(c, 2)"><div><span v-for="(n, j) in c.t2" :key="j">{{ n }}</span></div><b v-if="c.k === 'done'">{{ c.s2 }}</b></div>
+        <p v-if="!playing.length && !next.length && !results.length" class="empty">No matches yet. This page updates by itself.</p>
+
+        <template v-if="playing.length">
+          <h3 class="sec">Currently on court <span class="pill">{{ playing.length }} live</span></h3>
+          <article v-for="(m, i) in playing" :key="'p' + i" class="pcard">
+            <header class="two"><span class="badge play">LIVE</span><span>{{ mins(m) }}m played</span></header>
+            <div class="prow" :class="{ win: lead(m) === 1 }"><div><span v-for="(n, j) in m.t1" :key="j">{{ n }}</span></div><div class="end"><em v-if="lead(m) === 1" class="lead">LEAD</em><b>{{ m.s1 }}</b></div></div>
+            <div class="prow" :class="{ win: lead(m) === 2 }"><div><span v-for="(n, j) in m.t2" :key="j">{{ n }}</span></div><div class="end"><em v-if="lead(m) === 2" class="lead">LEAD</em><b>{{ m.s2 }}</b></div></div>
+            <footer>{{ lead(m) ? (lead(m) === 1 ? m.t1 : m.t2).join(' & ') + ' lead by ' + Math.abs(m.s1 - m.s2) : 'All square' }}</footer>
+          </article>
+        </template>
+
+        <template v-if="next.length">
+          <h3 class="sec">Upcoming queue <span class="pill">Next in line</span></h3>
+          <p class="hint">Please stay court-ready</p>
+          <article v-for="(m, i) in next" :key="'n' + i" class="pcard" :class="{ hl: i === 0 }">
+            <header><span class="badge next">UP NEXT · {{ i + 1 }}</span><small v-if="i === 0" class="warm">Warm up now · {{ est(0) ? 'next free court in ~' + est(0) + ' mins' : 'a court is free' }}</small></header>
+            <div class="prow"><div><span v-for="(n, j) in m.t1" :key="j">{{ n }}</span></div><em class="ab">Team A</em></div>
+            <div class="prow"><div><span v-for="(n, j) in m.t2" :key="j">{{ n }}</span></div><em class="ab">Team B</em></div>
+            <footer v-if="i">Queue position: {{ ord(i + 1) }} · {{ est(i) ? 'Est. ~' + est(i) + ' mins' : 'a court is free' }}</footer>
+          </article>
+        </template>
+
+        <template v-if="results.length">
+          <h3 class="sec">Results</h3>
+          <article v-for="r in results" :key="r.n" class="pcard">
+            <header><span class="badge">MATCH {{ r.n }}</span></header>
+            <div class="prow" :class="win(r, 1) ? 'win' : 'lose'"><div><span v-for="(n, j) in r.t1" :key="j">{{ n }}</span></div><div class="end"><em v-if="win(r, 1)" class="lead">👑 WINNER</em><b>{{ r.s1 }}</b></div></div>
+            <div class="prow" :class="win(r, 2) ? 'win' : 'lose'"><div><span v-for="(n, j) in r.t2" :key="j">{{ n }}</span></div><div class="end"><em v-if="win(r, 2)" class="lead">👑 WINNER</em><b>{{ r.s2 }}</b></div></div>
+            <footer v-if="r.min">Finished in {{ r.min }} mins · Match ended</footer>
           </article>
         </template>
       </template>
+
       <section v-else class="card">
         <p v-if="d.mode === 'team'" class="grp">Group A {{ gt[0] }} – {{ gt[1] }} Group B</p>
         <p v-if="!board.length" class="empty">No finished matches yet.</p>

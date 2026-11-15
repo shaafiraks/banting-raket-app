@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { api, LEVELS, MODES, fmtDate } from './api'
 import PlayerPick from './PlayerPick.vue'
 const props = defineProps({ sid: Number }); defineEmits(['back'])
@@ -9,6 +9,7 @@ const tab = ref('play'), info = ref({ name: '', play_date: '', mode: 'regular' }
 const courts = ref(3), msg = ref(''), toast = ref(''), q = ref(''), open = ref(false), act = ref(0), newLevel = ref(''), man = ref(['', '', '', ''])
 const tp = ref({ p1: '', p2: '', grp: 1, category: 'Mixed' })
 let uid = 0
+const idx = ref(0), sw = ref(null), durs = ref([]), lbStyle = ref('solid'), now = ref(Date.now())
 const mode = computed(() => info.value.mode)
 const say = t => { toast.value = t; setTimeout(() => (toast.value = ''), 2200) }
 
@@ -33,6 +34,10 @@ const waiting = computed(() => rows.value.filter(r => !st(r)).length)
 const playing = computed(() => matches.value.filter(m => m.st === 'play'))
 const slots = computed(() => courts.value - playing.value.length)
 const ordered = computed(() => [...matches.value].sort((a, b) => (a.st === 'play' ? 0 : 1) - (b.st === 'play' ? 0 : 1) || a.id - b.id))
+const ongoing = computed(() => matches.value.filter(m => m.st === 'play'))
+const upcoming = computed(() => matches.value.filter(m => m.st === 'queue').sort((a, b) => a.id - b.id))
+const history = computed(() => done.value.map((d, i) => ({ ...d, n: i + 1 })).reverse())
+const panes = computed(() => [{ k: 'on', label: 'Ongoing', n: ongoing.value.length }, { k: 'up', label: 'Upcoming', n: upcoming.value.length }, { k: 'hi', label: 'History', n: history.value.length }])
 const sub = r => `${r.level || '-'} - ${r.games}x`
 const lab = r => `${r.nama} (${sub(r)})`
 const editable = m => m.st === 'queue' && mode.value !== 'team'
@@ -113,7 +118,7 @@ function generateRound() { // one more game for everybody: players / 4 matches (
   let made = 0; for (let i = 0; i < n; i++) { if (gen()) made++; else break }
   if (!made) msg.value = noneMsg()
 }
-const start = m => { if (canStart(m)) m.st = 'play' }
+const start = m => { if (canStart(m)) { m.st = 'play'; m.at = Date.now() } }
 const drop = m => (matches.value = matches.value.filter(x => x !== m))
 function release(m) { inM(m).forEach(p => (p.games = Math.max(0, p.games - 1))); drop(m) }
 function swap(m, side, i, id) {
@@ -130,9 +135,10 @@ function manual(playNow) {
 }
 const valid = m => Number.isFinite(m.s1) && Number.isFinite(m.s2) && (mode.value === 'americano' || (m.s1 !== m.s2 && Math.max(m.s1, m.s2) >= 30))
 async function finish(m) {
-  const ids = inM(m).map(p => p.id)
-  await api('POST', S + '/matches', { players: ids, score1: m.s1, score2: m.s2 })
-  done.value.push({ p: ids, s1: m.s1, s2: m.s2 }); drop(m) // games were already counted when generated
+  const ids = inM(m).map(p => p.id), min = m.at ? Math.max(1, Math.round((Date.now() - m.at) / 60000)) : 0
+  await api('POST', S + '/matches', { players: ids, score1: m.s1, score2: m.s2, minutes: min })
+  if (min) durs.value.push(min)
+  done.value.push({ p: ids, s1: m.s1, s2: m.s2, min }); drop(m) // games were already counted when generated
 }
 const copy = m => navigator.clipboard.writeText(`${m.t1.map(p => p.nama).join(' & ')}\nvs\n${m.t2.map(p => p.nama).join(' & ')}`).then(() => say('Copied'), () => say('Copy failed'))
 
@@ -144,12 +150,20 @@ async function share() {
 }
 async function unshare() { await api('DELETE', S + '/share'); info.value.share = '' }
 let liveT
-watch(() => matches.value.map(m => [m.st, m.t1.map(p => p.nama), m.t2.map(p => p.nama)]), v => {
-  clearTimeout(liveT)
-  liveT = setTimeout(() => api('PUT', S + '/live', {
-    playing: v.filter(x => x[0] === 'play').map(x => [x[1], x[2]]), next: v.filter(x => x[0] === 'queue').map(x => [x[1], x[2]]),
-  }).catch(() => {}), 400)
-}, { immediate: true })
+const snap = () => ({ // what viewers see: names, live points, start time. No levels or payments.
+  playing: ongoing.value.map(m => ({ t1: m.t1.map(p => p.nama), t2: m.t2.map(p => p.nama), s1: Number.isFinite(m.s1) ? m.s1 : 0, s2: Number.isFinite(m.s2) ? m.s2 : 0, at: m.at || 0 })),
+  next: upcoming.value.map(m => ({ t1: m.t1.map(p => p.nama), t2: m.t2.map(p => p.nama) })),
+  avg: durs.value.length ? Math.round(durs.value.reduce((x, y) => x + y, 0) / durs.value.length) : 20, courts: courts.value,
+})
+watch(snap, v => { clearTimeout(liveT); liveT = setTimeout(() => api('PUT', S + '/live', v).catch(() => {}), 400) }, { immediate: true })
+
+// ---------- swipe carousel: Ongoing | Upcoming | History ----------
+function go(i) { idx.value = i; sw.value?.scrollTo({ left: i * sw.value.clientWidth, behavior: 'smooth' }) }
+function onSwipe() { const i = Math.round(sw.value.scrollLeft / sw.value.clientWidth); if (i !== idx.value) idx.value = i }
+function fit() { const el = sw.value?.children[idx.value]; if (el) sw.value.style.height = el.offsetHeight + 'px' }
+watch(sw, el => { if (!el) return; idx.value = 0; const ro = new ResizeObserver(fit); [...el.children].forEach(c => ro.observe(c)); fit() })
+watch(idx, () => nextTick(fit))
+let tick; onMounted(() => (tick = setInterval(() => (now.value = Date.now()), 30000))); onUnmounted(() => clearInterval(tick))
 
 // ---------- teams (a player can be in several teams) ----------
 const tname = t => `${nm(t.p1)} & ${nm(t.p2)}`
@@ -185,14 +199,16 @@ const stat = r => (mode.value === 'americano' ? `${r.pts} pts` : `${r.wins}W ${r
 function draw(list) {
   const c = document.createElement('canvas'); c.width = 1080; c.height = 1350
   const x = c.getContext('2d'), F = 'system-ui,-apple-system,sans-serif', tm = mode.value === 'team'
-  x.fillStyle = '#123D2B'; x.fillRect(0, 0, 1080, 1350)
+  const sty = lbStyle.value // solid | rounded (30px corners) | transparent
+  if (sty !== 'transparent') { x.fillStyle = '#123D2B'; x.beginPath(); x.roundRect(0, 0, 1080, 1350, sty === 'rounded' ? 30 : 0); x.fill() }
+  else { x.shadowColor = '#000000b0'; x.shadowBlur = 14 }
   x.fillStyle = '#D9F344'; x.font = `800 64px ${F}`; x.fillText(info.value.name.toUpperCase().slice(0, 24), 70, 140)
   x.fillStyle = '#F6F7F2'; x.font = `400 34px ${F}`; x.fillText(`${MODES[mode.value]} · ${fmtDate(info.value.play_date)}`, 70, 200)
   let y0 = 250
   if (tm) { x.fillStyle = '#D9F344'; x.font = `800 44px ${F}`; x.fillText(`Group A  ${gt.value[0]}  –  ${gt.value[1]}  Group B`, 70, 270); y0 = 305 }
   list.slice(0, 10).forEach((r, i) => {
     const y = y0 + i * 96
-    x.fillStyle = i < 3 ? '#D9F344' : '#1c5a3e'; x.beginPath(); x.roundRect(70, y, 940, 84, 22); x.fill()
+    x.fillStyle = i < 3 ? '#D9F344' : sty === 'transparent' ? '#123D2Bdd' : '#1c5a3e'; x.beginPath(); x.roundRect(70, y, 940, 84, 22); x.fill()
     x.fillStyle = i < 3 ? '#123D2B' : '#F6F7F2'
     x.font = `800 40px ${F}`; x.fillText(String(i + 1), 105, y + 56)
     x.font = `700 ${tm ? 30 : 38}px ${F}`; x.fillText(r.nama, 185, y + 55)
@@ -267,34 +283,49 @@ async function downloadBoard(b) { const a = document.createElement('a'); a.href 
         </div>
         <p v-if="slots < 0" class="msg">Courts lowered: current matches keep playing, and no new match can start until a court frees up.</p>
         <p v-if="!matches.length" class="empty">No matches yet. Generate as many as you like, even more than the courts, so players can get ready.</p>
-        <div class="matches">
-          <article v-for="m in ordered" :key="m.id" class="match" :class="{ queued: m.st === 'queue' }">
-            <h3>{{ m.st === 'play' ? 'Playing' : 'Up next' }}</h3>
-            <div class="teams">
-              <template v-for="(side, si) in ['t1', 't2']" :key="side">
-                <i v-if="si">vs</i>
-                <div>
-                  <template v-for="(p, i) in m[side]" :key="p.id">
-                    <select v-if="editable(m)" class="pick" :value="p.id" @change="swap(m, side, i, $event.target.value)">
-                      <option v-for="r in opts(m, p)" :key="r.id" :value="r.id">{{ lab(r) }}</option>
-                    </select>
-                    <span v-else>{{ p.nama }} <small>{{ sub(p) }}</small></span>
-                  </template>
-                </div>
-              </template>
-            </div>
-            <div v-if="m.st === 'play'" class="scores">
-              <input type="number" min="0" v-model.number="m.s1" aria-label="Team 1 score" /><em>{{ mode === 'americano' ? 'pts' : 'to 30' }}</em>
-              <input type="number" min="0" v-model.number="m.s2" aria-label="Team 2 score" />
-            </div>
-            <p v-if="blocked(m).length" class="wait">Waiting for {{ blocked(m).map(p => p.nama).join(', ') }} to finish</p>
-            <div class="acts">
-              <button v-if="m.st === 'play'" class="btn primary" :disabled="!valid(m)" @click="finish(m)">Finish</button>
-              <button v-else class="btn primary" :disabled="!canStart(m)" @click="start(m)">Play now</button>
-              <button class="btn ghost" @click="copy(m)">Copy</button>
-              <button class="btn ghost" @click="release(m)">{{ m.st === 'play' ? 'Cancel' : 'Remove' }}</button>
-            </div>
-          </article>
+        <div class="seg">
+          <button v-for="(t, i) in panes" :key="t.k" :class="{ on: idx === i }" @click="go(i)">{{ t.label }}<b>{{ t.n }}</b></button>
+        </div>
+        <div ref="sw" class="swipe" @scroll.passive="onSwipe">
+          <div v-for="(list, pi) in [ongoing, upcoming]" :key="pi" class="pane">
+            <p v-if="!list.length" class="empty">{{ pi ? 'Nothing up next. Generate some matches above.' : 'Nothing on court. Press Play now on an Up next match.' }}</p>
+            <article v-for="m in list" :key="m.id" class="match" :class="{ queued: m.st === 'queue' }">
+              <h3>{{ m.st === 'play' ? 'Playing' + (m.at ? ' · ' + Math.floor((now - m.at) / 60000) + 'm' : '') : 'Up next' }}</h3>
+              <div class="teams">
+                <template v-for="(side, si) in ['t1', 't2']" :key="side">
+                  <i v-if="si">vs</i>
+                  <div>
+                    <template v-for="(p, i) in m[side]" :key="p.id">
+                      <select v-if="editable(m)" class="pick" :value="p.id" @change="swap(m, side, i, $event.target.value)">
+                        <option v-for="r in opts(m, p)" :key="r.id" :value="r.id">{{ lab(r) }}</option>
+                      </select>
+                      <span v-else>{{ p.nama }} <small>{{ sub(p) }}</small></span>
+                    </template>
+                  </div>
+                </template>
+              </div>
+              <div v-if="m.st === 'play'" class="scores">
+                <input type="number" min="0" v-model.number="m.s1" aria-label="Team 1 score" /><em>{{ mode === 'americano' ? 'pts' : 'to 30' }}</em>
+                <input type="number" min="0" v-model.number="m.s2" aria-label="Team 2 score" />
+              </div>
+              <p v-if="blocked(m).length" class="wait">Waiting for {{ blocked(m).map(p => p.nama).join(', ') }} to finish</p>
+              <div class="acts">
+                <button v-if="m.st === 'play'" class="btn primary" :disabled="!valid(m)" @click="finish(m)">Finish</button>
+                <button v-else class="btn primary" :disabled="!canStart(m)" @click="start(m)">Play now</button>
+                <button class="btn ghost" @click="copy(m)">Copy</button>
+                <button class="btn ghost" @click="release(m)">{{ m.st === 'play' ? 'Cancel' : 'Remove' }}</button>
+              </div>
+            </article>
+          </div>
+          <div class="pane">
+            <p v-if="!history.length" class="empty">No finished matches yet.</p>
+            <article v-for="h in history" :key="h.n" class="pcard">
+              <header><span class="badge">MATCH {{ h.n }}</span></header>
+              <div class="prow" :class="h.s1 > h.s2 ? 'win' : 'lose'"><div><span v-for="id in h.p.slice(0, 2)" :key="id">{{ nm(id) }}</span></div><b>{{ h.s1 }}</b></div>
+              <div class="prow" :class="h.s2 > h.s1 ? 'win' : 'lose'"><div><span v-for="id in h.p.slice(2)" :key="id">{{ nm(id) }}</span></div><b>{{ h.s2 }}</b></div>
+              <footer v-if="h.min">Finished in {{ h.min }} mins</footer>
+            </article>
+          </div>
         </div>
       </section>
 
@@ -351,7 +382,12 @@ async function downloadBoard(b) { const a = document.createElement('a'); a.href 
       </div>
       <p v-if="!board.length" class="empty">No finished matches yet.
         {{ mode === 'americano' ? 'Ranked by total points scored.' : mode === 'team' ? 'Teams ranked by wins, plus the Group A vs Group B total.' : 'Ranked by wins, then point difference.' }}</p>
-      <div v-else class="board"><img :src="preview" alt="Leaderboard preview" /></div>
+      <div v-else class="board">
+        <div class="seg" style="width:100%;max-width:480px">
+          <button v-for="o in [['solid', 'Solid'], ['rounded', 'Rounded'], ['transparent', 'Transparent']]" :key="o[0]" :class="{ on: lbStyle === o[0] }" @click="lbStyle = o[0]">{{ o[1] }}</button>
+        </div>
+        <img :class="{ chk: lbStyle === 'transparent' }" :src="preview" alt="Leaderboard preview" />
+      </div>
     </section>
     <div v-if="toast" class="toast" role="status">{{ toast }}</div>
   </div>
