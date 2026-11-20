@@ -1,10 +1,11 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { api, LEVELS, MODES, fmtDate } from './api'
 defineEmits(['enter', 'logout'])
 const tab = ref('games'), list = ref([]), master = ref([]), show = ref(false), msg = ref('')
 const f = ref({ name: '', play_date: new Date().toLocaleDateString('en-CA'), mode: 'regular' })
-const np = ref({ id: '', nama: '', initial_level: '' })
+const np = ref({ id: '', nama: '', initial_level: '' }), psearch = ref('')
+const shown = computed(() => master.value.filter(p => (p.nama + ' ' + p.id).toLowerCase().includes(psearch.value.trim().toLowerCase())))
 async function load() {
   list.value = await api('GET', '/sessions'); master.value = await api('GET', '/players')
   np.value.id = String(Math.max(0, ...master.value.map(p => parseInt(p.id) || 0)) + 1).padStart(4, '0')
@@ -44,9 +45,10 @@ async function delMaster(p) { if (confirm(`Delete ${p.nama}?`)) { await api('DEL
         <select v-model="np.initial_level"><option value="">No level</option><option v-for="l in LEVELS" :key="l">{{ l }}</option></select>
         <button class="btn primary">Add player</button>
       </form>
+      <input v-model="psearch" class="search" type="search" placeholder="Search master players…" />
       <table class="tbl">
         <thead><tr><th>ID</th><th>Nama</th><th>Level</th><th></th></tr></thead>
-        <tbody><tr v-for="p in master" :key="p.id">
+        <tbody><tr v-for="p in shown" :key="p.id">
           <td data-l="ID">{{ p.id }}</td>
           <td data-l="Nama"><input v-model="p.nama" @change="saveMaster(p)" /></td>
           <td data-l="Level"><select v-model="p.initial_level" @change="saveMaster(p)"><option :value="null">-</option><option v-for="l in LEVELS" :key="l">{{ l }}</option></select></td>

@@ -9,7 +9,7 @@ const tab = ref('play'), info = ref({ name: '', play_date: '', mode: 'regular' }
 const courts = ref(3), msg = ref(''), toast = ref(''), q = ref(''), open = ref(false), act = ref(0), newLevel = ref(''), man = ref(['', '', '', ''])
 const tp = ref({ p1: '', p2: '', grp: 1, category: 'Mixed' })
 let uid = 0
-const idx = ref(0), sw = ref(null), durs = ref([]), lbStyle = ref('solid'), now = ref(Date.now())
+const idx = ref(0), sw = ref(null), durs = ref([]), lbStyle = ref('solid'), now = ref(Date.now()), fq = ref(''), manT = ref(['', ''])
 const mode = computed(() => info.value.mode)
 const say = t => { toast.value = t; setTimeout(() => (toast.value = ''), 2200) }
 
@@ -31,6 +31,7 @@ const inM = m => [...m.t1, ...m.t2]
 const stMap = computed(() => { const o = new Map(); for (const x of matches.value) for (const p of inM(x)) if (x.st === 'play' || !o.has(p.id)) o.set(p.id, x.st); return o })
 const st = r => stMap.value.get(r.id) || null // 'play' | 'queue' | null
 const waiting = computed(() => rows.value.filter(r => !st(r)).length)
+const shownRows = computed(() => rows.value.filter(r => r.nama.toLowerCase().includes(fq.value.trim().toLowerCase())))
 const playing = computed(() => matches.value.filter(m => m.st === 'play'))
 const slots = computed(() => courts.value - playing.value.length)
 const ordered = computed(() => [...matches.value].sort((a, b) => (a.st === 'play' ? 0 : 1) - (b.st === 'play' ? 0 : 1) || a.id - b.id))
@@ -47,6 +48,7 @@ const blocked = m => (m.st === 'queue' ? inM(m).filter(p => matches.value.some(x
 const canStart = m => slots.value > 0 && !blocked(m).length
 
 watch(q, () => (act.value = 0))
+const closeSoon = () => setTimeout(() => (open.value = false), 180) // lets a tap on the list register first
 function onKey(e) {
   const n = found.value.length
   if (e.key === 'ArrowDown' && n) { e.preventDefault(); act.value = (act.value + 1) % n }
@@ -128,9 +130,20 @@ function swap(m, side, i, id) {
 }
 const manOpts = i => rows.value.filter(r => !man.value.some((v, j) => j !== i && v === r.id)).map(r => ({ id: r.id, label: r.nama, sub: sub(r) + (st(r) === 'play' ? ' · playing' : '') }))
 function manual(playNow) {
-  const [a, b, c, d] = man.value.map(id => rows.value.find(r => r.id === id))
-  if (![a, b, c, d].every(Boolean)) { msg.value = 'Pick 4 players first.'; return }
-  const m = mk([a, b], [c, d]); man.value = ['', '', '', '']; msg.value = ''
+  let m
+  if (mode.value === 'team') {
+    const [a, b] = manT.value.map(id => teams.value.find(t => String(t.id) === id))
+    if (!a || !b) { msg.value = 'Pick two teams first.'; return }
+    if ([a.p1, a.p2].some(id => id === b.p1 || id === b.p2)) { msg.value = 'A player can\'t be on both sides.'; return }
+    const R = id => rows.value.find(r => r.id === id)
+    if (![a.p1, a.p2, b.p1, b.p2].every(R)) { msg.value = 'A team member is no longer checked in.'; return }
+    m = mk([R(a.p1), R(a.p2)], [R(b.p1), R(b.p2)], { a, b }); manT.value = ['', '']
+  } else {
+    const [a, b, c, d] = man.value.map(id => rows.value.find(r => r.id === id))
+    if (![a, b, c, d].every(Boolean)) { msg.value = 'Pick 4 players first.'; return }
+    m = mk([a, b], [c, d]); man.value = ['', '', '', '']
+  }
+  msg.value = ''
   if (playNow) { if (canStart(m)) start(m); else msg.value = 'Added to Up next: no free court, or a player is still playing.' }
 }
 const valid = m => Number.isFinite(m.s1) && Number.isFinite(m.s2) && (mode.value === 'americano' || (m.s1 !== m.s2 && Math.max(m.s1, m.s2) >= 30))
@@ -173,6 +186,7 @@ async function addTeam() {
   msg.value = ''; await api('POST', S + '/teams', tp.value); tp.value = { ...tp.value, p1: '', p2: '' }; teams.value = await api('GET', S + '/teams')
 }
 async function delTeam(t) { await api('DELETE', `${S}/teams/${t.id}`); teams.value = teams.value.filter(x => x !== t) }
+const teamOpts = grp => teams.value.filter(t => t.grp === grp).map(t => ({ id: String(t.id), label: tname(t), sub: t.category }))
 const optsFor = ex => rows.value.filter(r => r.id !== ex).map(r => ({ id: r.id, label: r.nama, sub: sub(r) }))
 
 // ---------- leaderboard ----------
@@ -200,21 +214,24 @@ function draw(list) {
   const c = document.createElement('canvas'); c.width = 1080; c.height = 1350
   const x = c.getContext('2d'), F = 'system-ui,-apple-system,sans-serif', tm = mode.value === 'team'
   const sty = lbStyle.value // solid | rounded (30px corners) | transparent
+  const tx = sty === 'transparent' ? 105 : 70
   if (sty !== 'transparent') { x.fillStyle = '#123D2B'; x.beginPath(); x.roundRect(0, 0, 1080, 1350, sty === 'rounded' ? 30 : 0); x.fill() }
-  else { x.shadowColor = '#000000b0'; x.shadowBlur = 14 }
-  x.fillStyle = '#D9F344'; x.font = `800 64px ${F}`; x.fillText(info.value.name.toUpperCase().slice(0, 24), 70, 140)
-  x.fillStyle = '#F6F7F2'; x.font = `400 34px ${F}`; x.fillText(`${MODES[mode.value]} · ${fmtDate(info.value.play_date)}`, 70, 200)
+  else { x.fillStyle = '#123D2B'; x.beginPath(); x.roundRect(70, 60, 940, tm ? 235 : 175, 22); x.fill() } // solid header card on a transparent image
+  x.fillStyle = '#D9F344'; x.font = `800 64px ${F}`; x.fillText(info.value.name.toUpperCase().slice(0, 24), tx, 140)
+  x.fillStyle = '#F6F7F2'; x.font = `400 34px ${F}`; x.fillText(`${MODES[mode.value]} · ${fmtDate(info.value.play_date)}`, tx, 200)
   let y0 = 250
-  if (tm) { x.fillStyle = '#D9F344'; x.font = `800 44px ${F}`; x.fillText(`Group A  ${gt.value[0]}  –  ${gt.value[1]}  Group B`, 70, 270); y0 = 305 }
+  if (tm) { x.fillStyle = '#D9F344'; x.font = `800 44px ${F}`; x.fillText(`Group A  ${gt.value[0]}  –  ${gt.value[1]}  Group B`, tx, 270); y0 = 305 }
   list.slice(0, 10).forEach((r, i) => {
     const y = y0 + i * 96
-    x.fillStyle = i < 3 ? '#D9F344' : sty === 'transparent' ? '#123D2Bdd' : '#1c5a3e'; x.beginPath(); x.roundRect(70, y, 940, 84, 22); x.fill()
+    x.fillStyle = i < 3 ? '#D9F344' : '#1c5a3e'; x.beginPath(); x.roundRect(70, y, 940, 84, 22); x.fill()
     x.fillStyle = i < 3 ? '#123D2B' : '#F6F7F2'
     x.font = `800 40px ${F}`; x.fillText(String(i + 1), 105, y + 56)
     x.font = `700 ${tm ? 30 : 38}px ${F}`; x.fillText(r.nama, 185, y + 55)
     x.font = `500 30px ${F}`; x.textAlign = 'right'; x.fillText(stat(r), 985, y + 54); x.textAlign = 'left'
   })
-  x.fillStyle = '#D9F344'; x.font = `500 30px ${F}`; x.fillText('Play together. Get better.', 70, 1315)
+  x.font = `500 30px ${F}`
+  if (sty === 'transparent') { const w = x.measureText('Play together. Get better.').width + 70; x.fillStyle = '#123D2B'; x.beginPath(); x.roundRect(70, 1265, w, 64, 32); x.fill(); x.fillStyle = '#D9F344'; x.fillText('Play together. Get better.', 105, 1307) }
+  else { x.fillStyle = '#D9F344'; x.fillText('Play together. Get better.', 70, 1315) }
   return c
 }
 const preview = computed(() => (board.value.length ? draw(board.value).toDataURL() : ''))
@@ -281,6 +298,13 @@ async function downloadBoard(b) { const a = document.createElement('a'); a.href 
           <button class="btn" @click="generate">Generate match</button>
           <button class="btn primary" @click="generateRound">Generate round</button>
         </div>
+        <div v-if="mode === 'team'" class="teamrow">
+          <p class="sec">Match two teams yourself</p>
+          <PlayerPick v-model="manT[0]" :options="teamOpts(1)" placeholder="Pick a Group A team" />
+          <i>vs</i>
+          <PlayerPick v-model="manT[1]" :options="teamOpts(2)" placeholder="Pick a Group B team" />
+          <div class="acts"><button class="btn" @click="manual(false)">Add to up next</button><button class="btn primary" :disabled="slots <= 0" @click="manual(true)">Play now</button></div>
+        </div>
         <p v-if="slots < 0" class="msg">Courts lowered: current matches keep playing, and no new match can start until a court frees up.</p>
         <p v-if="!matches.length" class="empty">No matches yet. Generate as many as you like, even more than the courts, so players can get ready.</p>
         <div class="seg">
@@ -331,38 +355,41 @@ async function downloadBoard(b) { const a = document.createElement('a'); a.href 
 
       <details v-if="mode !== 'team'" class="card">
         <summary>Create a match manually</summary>
-        <p class="empty">Pick any checked-in players, for example a late request.</p>
-        <div class="manual">
-          <PlayerPick v-for="(_, i) in man" :key="i" v-model="man[i]" :options="manOpts(i)" :placeholder="(i < 2 ? 'Team 1' : 'Team 2') + ' · player ' + ((i % 2) + 1)" />
-        </div>
+        <template v-if="mode !== 'team'">
+          <p class="empty">Pick any checked-in players, for example a late request.</p>
+          <div class="manual">
+            <PlayerPick v-for="(_, i) in man" :key="i" v-model="man[i]" :options="manOpts(i)" :placeholder="(i < 2 ? 'Team 1' : 'Team 2') + ' · player ' + ((i % 2) + 1)" />
+          </div>
+        </template>
         <div class="acts"><button class="btn" @click="manual(false)">Add to up next</button><button class="btn primary" :disabled="slots <= 0" @click="manual(true)">Play now</button></div>
       </details>
 
       <section class="card">
-        <div class="bar">
-          <h2>Players</h2>
+        <div class="bar"><h2>Players</h2></div>
+        <div class="addrow">
           <div class="combo">
-            <input v-model="q" placeholder="Search or add player…" autocomplete="off" @focus="open = true" @blur="open = false" @keydown="onKey" />
+            <input v-model="q" placeholder="Add player: type a name…" autocomplete="off" @focus="open = true" @blur="closeSoon" @keydown="onKey" />
             <template v-if="canNew">
               <select v-model="newLevel" aria-label="Level for new player"><option value="">New: no level</option><option v-for="l in LEVELS" :key="l">{{ l }}</option></select>
               <button class="btn primary" @click="addNew">+ Add "{{ q.trim() }}"{{ mode === 'regular' ? '' : ' (this game only)' }}</button>
             </template>
             <ul v-if="open && q.trim() && found.length" class="list">
               <li v-for="(p, i) in found" :key="p.id">
-                <button type="button" :class="{ on: i === act, in: p.in }" @mouseenter="act = i" @mousedown.prevent="!p.in && checkIn(p.id)">
+                <button type="button" :class="{ on: i === act, in: p.in }" @mouseenter="act = i" @click="!p.in && checkIn(p.id)">
                   {{ p.nama }}<small>{{ p.initial_level || '-' }}</small><small v-if="p.in">✓ already in</small>
                 </button>
               </li>
             </ul>
           </div>
         </div>
+        <input v-model="fq" class="filter" type="search" placeholder="Search players in this game…" />
         <table class="tbl play">
           <thead><tr><th>No</th><th>Nama</th><th>Jumlah Main</th><th>Level</th><th>Bayar</th><th></th></tr></thead>
           <tbody>
-            <tr v-for="(r, i) in rows" :key="r.id" :class="{ playing: st(r) === 'play' }">
-              <td data-l="No">{{ i + 1 }}</td>
+            <tr v-for="r in shownRows" :key="r.id" :class="{ playing: st(r) === 'play' }">
+              <td data-l="No">{{ rows.indexOf(r) + 1 }}</td>
               <td data-l="Nama">{{ r.nama }}<em v-if="st(r)"> · {{ st(r) === 'play' ? 'Playing' : 'Up next' }}</em></td>
-              <td data-l="Jumlah Main">{{ r.games }}</td>
+              <td data-l="Jumlah Main"><span class="cnt">{{ r.games }}</span></td>
               <td data-l="Level"><select v-model="r.level" @change="setLevel(r)"><option value="">-</option><option v-for="l in LEVELS" :key="l">{{ l }}</option></select></td>
               <td data-l="Bayar"><select v-model="r.payment" :class="{ paid: r.payment !== 'belum' }" @change="setPay(r)">
                 <option value="qris">QRIS</option><option value="cash">Cash</option><option value="belum">Belum bayar</option></select></td>
@@ -371,6 +398,7 @@ async function downloadBoard(b) { const a = document.createElement('a'); a.href 
           </tbody>
         </table>
         <p v-if="!rows.length" class="empty">Nobody has checked in yet.</p>
+        <p v-else-if="!shownRows.length" class="empty">No player matches your search.</p>
       </section>
     </template>
 

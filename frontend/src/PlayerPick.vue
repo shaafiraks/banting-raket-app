@@ -3,6 +3,7 @@ import { ref, computed, watch } from 'vue'
 const props = defineProps({ modelValue: String, options: { type: Array, default: () => [] }, placeholder: String })
 const emit = defineEmits(['update:modelValue'])
 const q = ref(''), open = ref(false), act = ref(0)
+const closeSoon = () => setTimeout(() => (open.value = false), 180) // lets a tap on the list register first
 const selected = computed(() => props.options.find(o => o.id === props.modelValue))
 const shown = computed(() => props.options.filter(o => o.label.toLowerCase().includes(q.value.trim().toLowerCase())))
 watch(q, () => (act.value = 0))
@@ -20,11 +21,11 @@ function onKey(e) {
 <template>
   <div class="pick-wrap">
     <input :value="text" :placeholder="selected?.label || placeholder" autocomplete="off"
-      @input="q = $event.target.value; open = true" @focus="open = true; q = ''" @blur="open = false" @keydown="onKey" />
-    <button v-if="modelValue" type="button" class="x" aria-label="Clear" @mousedown.prevent="clear">×</button>
+      @input="q = $event.target.value; open = true" @focus="open = true; q = ''" @blur="closeSoon" @keydown="onKey" />
+    <button v-if="modelValue" type="button" class="x" aria-label="Clear" @click="clear">×</button>
     <ul v-if="open" class="list">
       <li v-for="(o, i) in shown" :key="o.id">
-        <button type="button" :class="{ on: i === act }" @mouseenter="act = i" @mousedown.prevent="pick(o)">{{ o.label }}<small>{{ o.sub }}</small></button>
+        <button type="button" :class="{ on: i === act }" @mouseenter="act = i" @click="pick(o)">{{ o.label }}<small>{{ o.sub }}</small></button>
       </li>
       <li v-if="!shown.length" class="none">No match</li>
     </ul>

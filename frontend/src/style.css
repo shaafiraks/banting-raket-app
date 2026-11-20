@@ -1,3 +1,4 @@
+
 :root { --dk: #123D2B; --gr: #237A50; --lime: #D9F344; --ink: #171C19; --bg: #F6F7F2; }
 body { margin: 0; background: var(--bg); color: var(--ink); font-family: system-ui, sans-serif; }
 .op { max-width: 1000px; margin: 0 auto; padding: 16px; display: grid; gap: 16px; }
@@ -119,3 +120,18 @@ html { overflow-x: hidden; } body { max-width: 100vw; overflow-x: hidden; } .op 
 .ab { font-style: normal; font-size: .7rem; background: #eceee8; color: #5d665f; padding: 3px 8px; border-radius: 6px; }
 .pill { font-size: .65rem; background: var(--dk); color: var(--lime); padding: 3px 8px; border-radius: 999px; margin-left: 6px; letter-spacing: .04em; vertical-align: middle; }
 .hint { margin: -6px 0 0; font-size: .8rem; color: #5d665f; } .badge.play::before { content: "● "; }
+/* v7 */
+.pw { position: relative; } .pw input { padding-right: 46px; }
+.pw button { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); border: 0; background: none; padding: 8px; color: #5d665f; cursor: pointer; display: flex; }
+.filter, .search { width: 100%; margin: 0 0 12px; }
+.addrow { margin-bottom: 12px; } .addrow .combo { justify-content: flex-start; width: 100%; } .addrow .combo > input { max-width: none; }
+.tbl.play th:nth-child(3), .tbl.play td:nth-child(3) { text-align: center; }
+@media (max-width: 640px) {
+  .tbl.play tr { grid-template-columns: 86px minmax(0, 1fr) minmax(0, 1.2fr); }
+  .tbl.play td[data-l="Jumlah Main"] { display: flex; flex-direction: column; align-self: stretch; text-align: center; }
+  .tbl.play td[data-l="Jumlah Main"] .cnt { flex: 1; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 1.1rem; }
+}
+/* v8: pick teams for a team game */
+.teamrow { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 10px; align-items: center; margin: 4px 0 14px; padding: 12px; background: #f6f7f2; border-radius: 14px; }
+.teamrow .sec, .teamrow .acts { grid-column: 1 / -1; margin: 0; } .teamrow i { color: #5d665f; font-style: italic; }
+@media (max-width: 640px) { .teamrow { grid-template-columns: minmax(0, 1fr); } .teamrow i { display: none; } }
