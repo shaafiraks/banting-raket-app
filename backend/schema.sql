@@ -57,3 +57,7 @@ ALTER TABLE sessions ADD COLUMN IF NOT EXISTS state_v INT NOT NULL DEFAULT 0;
 -- v11: see and end logins per device
 ALTER TABLE auth_tokens ADD COLUMN IF NOT EXISTS ua VARCHAR(200) NOT NULL DEFAULT '';
 ALTER TABLE auth_tokens ADD COLUMN IF NOT EXISTS last_seen TIMESTAMP NOT NULL DEFAULT now();
+
+-- v12: custom group names for team games (shown as "Group <name>")
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS group_a VARCHAR(40) NOT NULL DEFAULT 'A';
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS group_b VARCHAR(40) NOT NULL DEFAULT 'B';

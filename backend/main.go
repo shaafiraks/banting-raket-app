@@ -142,9 +142,9 @@ func main() {
 	})
 	m.HandleFunc("GET /api/sessions/{sid}", func(w http.ResponseWriter, r *http.Request) {
 		sid := sidOf(r)
-		var name, d, mode, share string
+		var name, d, mode, share, ga, gb string
 		var courts int
-		if err := db.QueryRow(`SELECT name,to_char(play_date,'YYYY-MM-DD'),mode,courts,COALESCE(share_token,'') FROM sessions WHERE id=$1`, sid).Scan(&name, &d, &mode, &courts, &share); err != nil { http.Error(w, "not found", 404); return }
+		if err := db.QueryRow(`SELECT name,to_char(play_date,'YYYY-MM-DD'),mode,courts,COALESCE(share_token,''),group_a,group_b FROM sessions WHERE id=$1`, sid).Scan(&name, &d, &mode, &courts, &share, &ga, &gb); err != nil { http.Error(w, "not found", 404); return }
 		pl := rowsOf(`SELECT sp.player_id,COALESCE(p.nama,sp.guest_name,sp.player_id),COALESCE(sp.level,''),sp.payment,
 		  (SELECT COUNT(*) FROM matches m WHERE m.session_id=sp.session_id AND sp.player_id IN (m.p1,m.p2,m.p3,m.p4))
 		  FROM session_players sp LEFT JOIN players p ON p.id=sp.player_id WHERE sp.session_id=$1 ORDER BY sp.checked_in_at, sp.player_id`, func(rs *sql.Rows) any {
@@ -153,16 +153,20 @@ func main() {
 			rs.Scan(&id, &nama, &lv, &pay, &g)
 			return map[string]any{"id": id, "nama": nama, "level": lv, "payment": pay, "games": g}
 		}, sid)
-		js(w, map[string]any{"id": sid, "name": name, "play_date": d, "mode": mode, "courts": courts, "share": share, "players": pl})
+		js(w, map[string]any{"id": sid, "name": name, "play_date": d, "mode": mode, "courts": courts, "share": share, "group_a": ga, "group_b": gb, "players": pl})
 	})
 	m.HandleFunc("PUT /api/sessions/{sid}", func(w http.ResponseWriter, r *http.Request) {
 		b, err := body[struct {
 			Courts int    `json:"courts"`
 			Name   string `json:"name"`
+			GroupA string `json:"group_a"`
+			GroupB string `json:"group_b"`
 		}](r)
 		if err != nil { http.Error(w, "bad request", 400); return }
 		if b.Name != "" { db.Exec(`UPDATE sessions SET name=$2 WHERE id=$1`, sidOf(r), b.Name) }
 		if b.Courts >= 1 { db.Exec(`UPDATE sessions SET courts=$2 WHERE id=$1`, sidOf(r), b.Courts) }
+		if g := strings.TrimSpace(b.GroupA); g != "" && len(g) <= 40 { db.Exec(`UPDATE sessions SET group_a=$2 WHERE id=$1`, sidOf(r), g) }
+		if g := strings.TrimSpace(b.GroupB); g != "" && len(g) <= 40 { db.Exec(`UPDATE sessions SET group_b=$2 WHERE id=$1`, sidOf(r), g) }
 		w.WriteHeader(204)
 	})
 	m.HandleFunc("POST /api/sessions/{sid}/players", func(w http.ResponseWriter, r *http.Request) {
@@ -274,8 +278,8 @@ func main() {
 	// public: matches + leaderboard data only. No player list, levels or payments.
 	m.HandleFunc("GET /api/public/{token}", func(w http.ResponseWriter, r *http.Request) {
 		var sid int
-		var name, d, mode, live string
-		if db.QueryRow(`SELECT id,name,to_char(play_date,'YYYY-MM-DD'),mode,live FROM sessions WHERE share_token=$1`, r.PathValue("token")).Scan(&sid, &name, &d, &mode, &live) != nil {
+		var name, d, mode, live, ga, gb string
+		if db.QueryRow(`SELECT id,name,to_char(play_date,'YYYY-MM-DD'),mode,live,group_a,group_b FROM sessions WHERE share_token=$1`, r.PathValue("token")).Scan(&sid, &name, &d, &mode, &live, &ga, &gb) != nil {
 			http.Error(w, "not found", 404)
 			return
 		}
@@ -295,7 +299,7 @@ func main() {
 			rs.Scan(&a, &b, &g, &c)
 			return map[string]any{"names": []string{nm(a), nm(b)}, "grp": g, "category": c}
 		}, sid)
-		js(w, map[string]any{"name": name, "play_date": d, "mode": mode, "live": json.RawMessage(live), "results": res, "teams": tm})
+		js(w, map[string]any{"name": name, "play_date": d, "mode": mode, "live": json.RawMessage(live), "group_a": ga, "group_b": gb, "results": res, "teams": tm})
 	})
 	m.HandleFunc("GET /api/sessions/{sid}/state", func(w http.ResponseWriter, r *http.Request) {
 		var st string

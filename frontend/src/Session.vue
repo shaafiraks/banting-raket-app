@@ -16,7 +16,8 @@ const say = t => { toast.value = t; setTimeout(() => (toast.value = ''), 2200) }
 async function load() {
   master.value = await api('GET', '/players')
   const s = await api('GET', S); courts.value = s.courts
-  info.value = { ...s, name: document.activeElement?.classList?.contains('title-input') ? info.value.name : s.name }
+  const typing = document.activeElement?.classList?.contains('title-input') || document.activeElement?.classList?.contains('gin')
+  info.value = typing ? { ...s, name: info.value.name, group_a: info.value.group_a, group_b: info.value.group_b } : s
   const old = new Map(rows.value.map(r => [r.id, r])) // keep planned game counts across reloads
   rows.value = s.players.map(p => { const o = old.get(p.id); if (o) { Object.assign(o, { fin: p.games, level: p.level, payment: p.payment, nama: p.nama }); return o } return { ...p, fin: p.games, last: 0 } })
   done.value = await api('GET', S + '/matches'); teams.value = await api('GET', S + '/teams')
@@ -66,6 +67,11 @@ async function addNew() {
 const setPay = r => api('PUT', `${S}/players/${r.id}`, { payment: r.payment })
 const setLevel = r => api('PUT', `${S}/players/${r.id}`, { level: r.level })
 async function removeRow(r) { await api('DELETE', `${S}/players/${r.id}`); rows.value = rows.value.filter(x => x !== r) }
+const gname = g => 'Group ' + ((g === 1 ? info.value.group_a : info.value.group_b) || (g === 1 ? 'A' : 'B'))
+async function saveGroups() {
+  const a = (info.value.group_a || '').trim() || 'A', b = (info.value.group_b || '').trim() || 'B'
+  info.value.group_a = a; info.value.group_b = b; await api('PUT', S, { group_a: a, group_b: b })
+}
 async function rename() { const n = info.value.name.trim(); if (!n) return load(); await api('PUT', S, { name: n }) }
 async function setCourts(n) { courts.value = Math.max(1, Math.min(12, n)); await api('PUT', S, { courts: courts.value }) }
 
@@ -290,7 +296,7 @@ const board = computed(() => {
   }
   return Object.values(t).sort(sortBy(mode.value === 'americano' ? 'pts' : 'wins'))
 })
-const gt = computed(() => [1, 2].map(g => board.value.filter(x => x.grp === g).reduce((n, x) => n + x.wins, 0)))
+const gt = computed(() => [done.value.filter(d => d.s1 > d.s2).length, done.value.filter(d => d.s2 > d.s1).length]) // matches won by each group (side 1 = first group)
 const stat = r => (mode.value === 'americano' ? `${r.pts} pts` : `${r.wins}W ${r.games - r.wins}L  ${r.diff > 0 ? '+' : ''}${r.diff}`)
 function draw(list) {
   const c = document.createElement('canvas'); c.width = 1080; c.height = 1350
@@ -302,7 +308,7 @@ function draw(list) {
   x.fillStyle = '#D9F344'; x.font = `800 64px ${F}`; x.fillText(info.value.name.toUpperCase().slice(0, 24), tx, 140)
   x.fillStyle = '#F6F7F2'; x.font = `400 34px ${F}`; x.fillText(`${MODES[mode.value]} · ${fmtDate(info.value.play_date)}`, tx, 200)
   let y0 = 250
-  if (tm) { x.fillStyle = '#D9F344'; x.font = `800 44px ${F}`; x.fillText(`Group A  ${gt.value[0]}  –  ${gt.value[1]}  Group B`, tx, 270); y0 = 305 }
+  if (tm) { x.fillStyle = '#D9F344'; x.font = `800 44px ${F}`; x.fillText(`${(info.value.group_a || 'A').slice(0, 14)}  ${gt.value[0]} – ${gt.value[1]}  ${(info.value.group_b || 'B').slice(0, 14)}`, tx, 270); y0 = 305 }
   list.slice(0, 10).forEach((r, i) => {
     const y = y0 + i * 96
     x.fillStyle = i < 3 ? '#D9F344' : '#1c5a3e'; x.beginPath(); x.roundRect(70, y, 940, 84, 22); x.fill()
@@ -351,19 +357,29 @@ async function downloadBoard(b) { const a = document.createElement('a'); a.href 
         </div>
       </header>
 
+      <section v-if="mode === 'team'" class="scorecard">
+        <div class="side" :class="{ ahead: gt[0] > gt[1] }"><span class="gn">{{ info.group_a || 'A' }}</span><b>{{ gt[0] }}</b></div>
+        <i>vs</i>
+        <div class="side" :class="{ ahead: gt[1] > gt[0] }"><span class="gn">{{ info.group_b || 'B' }}</span><b>{{ gt[1] }}</b></div>
+      </section>
+
       <details v-if="mode === 'team'" class="card" open>
         <summary>Teams ({{ teams.length }})</summary>
         <p class="empty">A player can be in more than one team, and the same pair can be added more than once.</p>
+        <div class="gnames">
+          <label>Group <input class="gin" v-model="info.group_a" maxlength="40" placeholder="A" @change="saveGroups" /></label>
+          <label>Group <input class="gin" v-model="info.group_b" maxlength="40" placeholder="B" @change="saveGroups" /></label>
+        </div>
         <p v-if="!rows.length" class="empty">Check in players first (search box under Players), then build teams from them.</p>
         <div class="manual">
           <PlayerPick v-model="tp.p1" :options="optsFor(tp.p2)" placeholder="Player 1" />
           <PlayerPick v-model="tp.p2" :options="optsFor(tp.p1)" placeholder="Player 2" />
-          <select v-model.number="tp.grp"><option :value="1">Group A</option><option :value="2">Group B</option></select>
+          <select v-model.number="tp.grp"><option :value="1">{{ gname(1) }}</option><option :value="2">{{ gname(2) }}</option></select>
           <select v-model="tp.category"><option>Mixed</option><option>Women</option><option>Men</option></select>
         </div>
         <div class="acts"><button class="btn primary" @click="addTeam">Add team</button></div>
         <div class="teamlist">
-          <div v-for="g in [1, 2]" :key="g"><h4>Group {{ g === 1 ? 'A' : 'B' }}</h4>
+          <div v-for="g in [1, 2]" :key="g"><h4>{{ gname(g) }}</h4>
             <ul><li v-for="t in teams.filter(t => t.grp === g)" :key="t.id"><span>{{ tname(t) }} <small>{{ t.category }}</small></span><button class="btn ghost sm" @click="delTeam(t)">×</button></li></ul>
           </div>
         </div>
@@ -382,9 +398,9 @@ async function downloadBoard(b) { const a = document.createElement('a'); a.href 
         </div>
         <div v-if="mode === 'team'" class="teamrow">
           <p class="sec">Match two teams yourself</p>
-          <PlayerPick v-model="manT[0]" :options="teamOpts(1)" placeholder="Pick a Group A team" />
+          <PlayerPick v-model="manT[0]" :options="teamOpts(1)" :placeholder="'Pick a ' + gname(1) + ' team'" />
           <i>vs</i>
-          <PlayerPick v-model="manT[1]" :options="teamOpts(2)" placeholder="Pick a Group B team" />
+          <PlayerPick v-model="manT[1]" :options="teamOpts(2)" :placeholder="'Pick a ' + gname(2) + ' team'" />
           <div class="acts"><button class="btn" @click="manual(false)">Add to up next</button><button class="btn primary" :disabled="slots <= 0" @click="manual(true)">Play now</button></div>
         </div>
         <p v-if="slots < 0" class="msg">Courts lowered: current matches keep playing, and no new match can start until a court frees up.</p>
@@ -494,7 +510,7 @@ async function downloadBoard(b) { const a = document.createElement('a'); a.href 
         <button class="btn primary" :disabled="!board.length" @click="copyBoard">Copy image</button>
       </div>
       <p v-if="!board.length" class="empty">No finished matches yet.
-        {{ mode === 'americano' ? 'Ranked by total points scored.' : mode === 'team' ? 'Teams ranked by wins, plus the Group A vs Group B total.' : 'Ranked by wins, then point difference.' }}</p>
+        {{ mode === 'americano' ? 'Ranked by total points scored.' : mode === 'team' ? 'Teams ranked by wins, plus the total for each group.' : 'Ranked by wins, then point difference.' }}</p>
       <div v-else class="board">
         <div class="seg" style="width:100%;max-width:480px">
           <button v-for="o in [['solid', 'Solid'], ['rounded', 'Rounded'], ['transparent', 'Transparent']]" :key="o[0]" :class="{ on: lbStyle === o[0] }" @click="lbStyle = o[0]">{{ o[1] }}</button>

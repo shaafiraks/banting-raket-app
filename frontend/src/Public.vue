@@ -37,7 +37,7 @@ const board = computed(() => {
   }
   return Object.values(t).sort(sortBy(mode === 'americano' ? 'pts' : 'wins'))
 })
-const gt = computed(() => [1, 2].map(g => board.value.filter(x => x.grp === g).reduce((n, x) => n + x.wins, 0)))
+const gt = computed(() => { const rs = d.value?.results || []; return [rs.filter(r => r.s1 > r.s2).length, rs.filter(r => r.s2 > r.s1).length] }) // matches won by each group
 </script>
 <template>
   <div class="op">
@@ -50,6 +50,11 @@ const gt = computed(() => [1, 2].map(g => board.value.filter(x => x.grp === g).r
       <header class="hero">
         <div><h1>{{ d.name }}</h1><p class="tag"><span class="mchip">{{ MODES[d.mode] }}</span>{{ fmtDate(d.play_date) }}</p></div>
       </header>
+      <section v-if="d.mode === 'team'" class="scorecard">
+        <div class="side" :class="{ ahead: gt[0] > gt[1] }"><span class="gn">{{ d.group_a || 'A' }}</span><b>{{ gt[0] }}</b></div>
+        <i>vs</i>
+        <div class="side" :class="{ ahead: gt[1] > gt[0] }"><span class="gn">{{ d.group_b || 'B' }}</span><b>{{ gt[1] }}</b></div>
+      </section>
       <template v-if="tab === 'matches'">
         <p v-if="!playing.length && !next.length && !results.length" class="empty">No matches yet. This page updates by itself.</p>
 
@@ -86,7 +91,6 @@ const gt = computed(() => [1, 2].map(g => board.value.filter(x => x.grp === g).r
       </template>
 
       <section v-else class="card">
-        <p v-if="d.mode === 'team'" class="grp">Group A {{ gt[0] }} – {{ gt[1] }} Group B</p>
         <p v-if="!board.length" class="empty">No finished matches yet.</p>
         <table v-else class="tbl">
           <thead><tr><th>#</th><th>{{ d.mode === 'team' ? 'Team' : 'Player' }}</th><th>{{ d.mode === 'americano' ? 'Pts' : 'W-L' }}</th><th>+/-</th></tr></thead>

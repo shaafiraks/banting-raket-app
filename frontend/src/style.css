@@ -145,3 +145,10 @@ label.btn { display: inline-block; cursor: pointer; } label.btn:focus-within { o
 @media (max-width: 640px) { .improw { grid-template-columns: minmax(0, 1fr); } }
 /* v11: devices */
 .devs { list-style: none; margin: 0 0 12px; padding: 0; } .devs li { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid #eceee8; } .devs small { color: #5d665f; }
+/* v12: group names */
+.gnames { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 0 0 12px; } .gnames label { display: flex; align-items: center; gap: 8px; font-weight: 700; } .gnames input { flex: 1; min-width: 0; }
+@media (max-width: 640px) { .gnames { grid-template-columns: 1fr; } }
+/* v13: overall score between the two groups */
+.scorecard { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 12px; background: var(--dk); color: #fff; border-radius: 20px; padding: 16px; text-align: center; }
+.scorecard .gn { display: block; font-weight: 700; opacity: .9; overflow-wrap: anywhere; } .scorecard b { display: block; font-size: 2.8rem; line-height: 1.1; color: #fff; }
+.scorecard .ahead b { color: var(--lime); } .scorecard i { opacity: .6; font-style: italic; }
