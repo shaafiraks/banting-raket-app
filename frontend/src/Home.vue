@@ -16,12 +16,23 @@ async function del(g) { if (confirm(`Delete "${g.name}" and all its matches?`)) 
 async function addPlayer() { await api('POST', '/players', np.value); np.value.nama = ''; np.value.initial_level = ''; await load() }
 const saveMaster = p => api('PUT', `/players/${p.id}`, { id: p.id, nama: p.nama, initial_level: p.initial_level || '' })
 async function delMaster(p) { if (confirm(`Delete ${p.nama}?`)) { await api('DELETE', `/players/${p.id}`); await load() } }
+const devices = ref([])
+const loadDevices = async () => { try { devices.value = await api('GET', '/devices') } catch (e) { msg.value = e.message } }
+const dev = ua => {
+  const os = /iPhone|iPad/.test(ua) ? 'iPhone/iPad' : /Android/.test(ua) ? 'Android' : /Mac OS/.test(ua) ? 'Mac' : /Windows/.test(ua) ? 'Windows' : 'Unknown device'
+  const br = /Edg\//.test(ua) ? 'Edge' : /CriOS|Chrome/.test(ua) ? 'Chrome' : /Safari/.test(ua) ? 'Safari' : /Firefox/.test(ua) ? 'Firefox' : 'browser'
+  return `${os} · ${br}`
+}
+const ago = iso => { const m = Math.max(0, Math.round((Date.now() - new Date(iso)) / 60000)); return m < 1 ? 'just now' : m < 60 ? m + ' min ago' : m < 1440 ? Math.round(m / 60) + ' h ago' : Math.round(m / 1440) + ' d ago' }
+async function kick(d) { await api('DELETE', '/devices/' + d.id); await loadDevices() }
+async function kickOthers() { if (confirm('Log out every other device?')) { await api('POST', '/devices/logout-others'); await loadDevices() } }
 </script>
 <template>
   <div class="op">
     <nav>
       <button :class="{ on: tab === 'games' }" @click="tab = 'games'">Games</button>
       <button :class="{ on: tab === 'players' }" @click="tab = 'players'">Players</button>
+      <button :class="{ on: tab === 'account' }" @click="tab = 'account'; loadDevices()">Account</button>
     </nav>
     <p v-if="msg" class="msg">{{ msg }}</p>
     <template v-if="tab === 'games'">
@@ -38,7 +49,7 @@ async function delMaster(p) { if (confirm(`Delete ${p.nama}?`)) { await api('DEL
         <div class="acts"><button class="btn ghost sm" @click="del(g)">Delete</button><button class="btn primary" @click="$emit('enter', g.id)">Enter →</button></div>
       </section>
     </template>
-    <section v-else class="card">
+    <section v-else-if="tab === 'players'" class="card">
       <div class="bar"><h2>Master players ({{ master.length }})</h2></div>
       <form class="add" @submit.prevent="addPlayer">
         <input v-model="np.id" placeholder="ID" required /><input v-model="np.nama" placeholder="Name" required />
@@ -55,6 +66,17 @@ async function delMaster(p) { if (confirm(`Delete ${p.nama}?`)) { await api('DEL
           <td><button class="btn ghost sm" @click="delMaster(p)">Delete</button></td>
         </tr></tbody>
       </table>
+    </section>
+    <section v-else class="card">
+      <div class="bar"><h2>Logged-in devices</h2></div>
+      <p class="empty" style="margin-top:0">Every phone or computer that is logged in is listed here. A login lasts 7 days. The view-only share link never logs anyone in. If you see a device you don't know, log it out and change the password.</p>
+      <ul class="devs">
+        <li v-for="d in devices" :key="d.id">
+          <div><b>{{ dev(d.ua) }}</b> <span v-if="d.current" class="mchip">This device</span><br /><small>Last active {{ ago(d.last_seen) }} · logged in {{ ago(d.created) }}</small></div>
+          <button v-if="!d.current" class="btn ghost sm" @click="kick(d)">Log out</button>
+        </li>
+      </ul>
+      <div class="acts"><button class="btn" :disabled="devices.length < 2" @click="kickOthers">Log out all other devices</button></div>
     </section>
     <div v-if="show" class="modal" @click.self="show = false">
       <form @submit.prevent="create">

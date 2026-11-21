@@ -46,3 +46,14 @@ CREATE TABLE IF NOT EXISTS users (id SERIAL PRIMARY KEY, username VARCHAR(50) UN
 CREATE TABLE IF NOT EXISTS auth_tokens (token VARCHAR(64) PRIMARY KEY, user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE, created_at TIMESTAMP NOT NULL DEFAULT now());
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS share_token VARCHAR(32) NULL;
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS live TEXT NOT NULL DEFAULT '{}';
+
+-- v6: how long a match took
+ALTER TABLE matches ADD COLUMN IF NOT EXISTS duration_min SMALLINT NULL;
+
+-- v10: live matches (ongoing + upcoming) are saved so a refresh or another admin sees them
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS state TEXT NOT NULL DEFAULT '{}';
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS state_v INT NOT NULL DEFAULT 0;
+
+-- v11: see and end logins per device
+ALTER TABLE auth_tokens ADD COLUMN IF NOT EXISTS ua VARCHAR(200) NOT NULL DEFAULT '';
+ALTER TABLE auth_tokens ADD COLUMN IF NOT EXISTS last_seen TIMESTAMP NOT NULL DEFAULT now();

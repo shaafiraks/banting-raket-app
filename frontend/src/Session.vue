@@ -9,18 +9,19 @@ const tab = ref('play'), info = ref({ name: '', play_date: '', mode: 'regular' }
 const courts = ref(3), msg = ref(''), toast = ref(''), q = ref(''), open = ref(false), act = ref(0), newLevel = ref(''), man = ref(['', '', '', ''])
 const tp = ref({ p1: '', p2: '', grp: 1, category: 'Mixed' })
 let uid = 0
-const idx = ref(0), sw = ref(null), durs = ref([]), lbStyle = ref('solid'), now = ref(Date.now()), fq = ref(''), manT = ref(['', ''])
+const idx = ref(0), sw = ref(null), durs = ref([]), lbStyle = ref('solid'), now = ref(Date.now()), fq = ref(''), manT = ref(['', '']), showImp = ref(false), impRows = ref([]), prog = ref(0), busy = ref(false)
 const mode = computed(() => info.value.mode)
 const say = t => { toast.value = t; setTimeout(() => (toast.value = ''), 2200) }
 
 async function load() {
   master.value = await api('GET', '/players')
-  const s = await api('GET', S); info.value = s; courts.value = s.courts
+  const s = await api('GET', S); courts.value = s.courts
+  info.value = { ...s, name: document.activeElement?.classList?.contains('title-input') ? info.value.name : s.name }
   const old = new Map(rows.value.map(r => [r.id, r])) // keep planned game counts across reloads
-  rows.value = s.players.map(p => old.get(p.id) || { ...p, last: 0 })
+  rows.value = s.players.map(p => { const o = old.get(p.id); if (o) { Object.assign(o, { fin: p.games, level: p.level, payment: p.payment, nama: p.nama }); return o } return { ...p, fin: p.games, last: 0 } })
   done.value = await api('GET', S + '/matches'); teams.value = await api('GET', S + '/teams')
+  recount()
 }
-onMounted(() => load().catch(e => (msg.value = e.message)))
 
 const nm = id => rows.value.find(r => r.id === id)?.nama || id
 const nextId = () => String(Math.max(0, ...master.value.map(p => parseInt(p.id) || 0)) + 1).padStart(4, '0')
@@ -78,10 +79,14 @@ const partnered = computed(() => {
   for (const x of matches.value) { add(x.t1.map(p => p.id)); add(x.t2.map(p => p.id)) }
   return o
 })
+function recount() { // jumlah main = finished + generated (ongoing/upcoming)
+  const c = new Map(); for (const m of matches.value) for (const p of inM(m)) c.set(p.id, (c.get(p.id) || 0) + 1)
+  rows.value.forEach(r => (r.games = (r.fin || 0) + (c.get(r.id) || 0)))
+}
 function mk(t1, t2, extra = {}) {
-  const m = { id: ++uid, st: 'queue', t1, t2, s1: null, s2: null, ...extra }
-  inM(m).forEach(p => { p.games++; p.last = Date.now() })
-  matches.value.push(m); return matches.value[matches.value.length - 1] // reactive version
+  const m = { id: Date.now() * 1000 + (++uid % 1000), st: 'queue', t1, t2, s1: null, s2: null, ...extra }
+  inM(m).forEach(p => (p.last = Date.now()))
+  matches.value.push(m); recount(); return matches.value[matches.value.length - 1] // reactive version
 }
 function build() {
   const am = mode.value === 'americano'
@@ -122,11 +127,11 @@ function generateRound() { // one more game for everybody: players / 4 matches (
 }
 const start = m => { if (canStart(m)) { m.st = 'play'; m.at = Date.now() } }
 const drop = m => (matches.value = matches.value.filter(x => x !== m))
-function release(m) { inM(m).forEach(p => (p.games = Math.max(0, p.games - 1))); drop(m) }
+function release(m) { drop(m); recount() }
 function swap(m, side, i, id) {
   const old = m[side][i], nu = rows.value.find(r => r.id === id)
   if (!nu || nu === old) return
-  old.games = Math.max(0, old.games - 1); nu.games++; nu.last = Date.now(); m[side][i] = nu
+  nu.last = Date.now(); m[side][i] = nu; recount()
 }
 const manOpts = i => rows.value.filter(r => !man.value.some((v, j) => j !== i && v === r.id)).map(r => ({ id: r.id, label: r.nama, sub: sub(r) + (st(r) === 'play' ? ' · playing' : '') }))
 function manual(playNow) {
@@ -151,9 +156,86 @@ async function finish(m) {
   const ids = inM(m).map(p => p.id), min = m.at ? Math.max(1, Math.round((Date.now() - m.at) / 60000)) : 0
   await api('POST', S + '/matches', { players: ids, score1: m.s1, score2: m.s2, minutes: min })
   if (min) durs.value.push(min)
-  done.value.push({ p: ids, s1: m.s1, s2: m.s2, min }); drop(m) // games were already counted when generated
+  done.value.push({ p: ids, s1: m.s1, s2: m.s2, min }); inM(m).forEach(p => p.fin++); drop(m); recount() // games were already counted when generated
 }
 const copy = m => navigator.clipboard.writeText(`${m.t1.map(p => p.nama).join(' & ')}\nvs\n${m.t2.map(p => p.nama).join(' & ')}`).then(() => say('Copied'), () => say('Copy failed'))
+
+// ---------- live matches are saved on the server, so a refresh or another admin sees the same ones ----------
+let loaded = false, dirty = false, vLocal = 0, lastJson = '', pushT, pollT, ptick = 0
+const serial = () => ({ matches: matches.value.map(m => ({ id: m.id, st: m.st, t1: m.t1.map(p => p.id), t2: m.t2.map(p => p.id), s1: m.s1, s2: m.s2, at: m.at || 0, a: m.a?.id ?? null, b: m.b?.id ?? null })) })
+function hydrate(st) {
+  const R = id => rows.value.find(r => r.id === id)
+  matches.value = (st?.matches || []).map(x => ({ ...x, t1: x.t1.map(R), t2: x.t2.map(R), a: x.a ? teams.value.find(t => t.id === x.a) : undefined, b: x.b ? teams.value.find(t => t.id === x.b) : undefined }))
+    .filter(m => [...m.t1, ...m.t2].every(Boolean))
+  recount()
+}
+watch(() => JSON.stringify(serial()), j => {
+  if (!loaded || j === lastJson) return
+  dirty = true; clearTimeout(pushT)
+  pushT = setTimeout(async () => {
+    try { const r = await api('PUT', S + '/state', JSON.parse(j)); vLocal = r.v; lastJson = j } catch { /* tries again on the next change */ } finally { dirty = false }
+  }, 400)
+})
+async function sync(force = false) { // pulls changes made by another admin (or before a refresh)
+  const r = await api('GET', S + '/state')
+  if (!force && (dirty || r.v === vLocal)) return
+  await load(); hydrate(r.state); vLocal = r.v; lastJson = JSON.stringify(serial())
+}
+onMounted(async () => {
+  try { await sync(true) } catch (e) { msg.value = e.message }
+  loaded = true
+  pollT = setInterval(() => { sync().then(() => ++ptick % 4 === 0 && load()).catch(() => {}) }, 5000)
+})
+onUnmounted(() => clearInterval(pollT))
+
+// ---------- import the day's players from Excel (column A = name, optional column B = level) ----------
+const norm = t => String(t ?? '').toLowerCase().replace(/\s+/g, ' ').trim()
+function lev(a, b) { // edit distance, to catch small spelling differences like Rofi / Rofie
+  const d = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)])
+  for (let j = 1; j <= b.length; j++) d[0][j] = j
+  for (let i = 1; i <= a.length; i++) for (let j = 1; j <= b.length; j++) d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1))
+  return d[a.length][b.length]
+}
+function findMatch(name) {
+  const n = norm(name), exact = master.value.find(p => norm(p.nama) === n)
+  if (exact) return { kind: 'exact', cands: [exact] }
+  const cands = master.value.filter(p => { const m = norm(p.nama); return n.length >= 3 && (lev(m, n) <= 1 || m.startsWith(n) || n.startsWith(m)) })
+  return { kind: cands.length === 1 ? 'similar' : cands.length ? 'multi' : 'new', cands }
+}
+const inGame = id => rows.value.some(r => r.id === id)
+const ready = computed(() => impRows.value.filter(i => i.sel !== 'skip').length)
+async function pickFile(e) {
+  const f = e.target.files[0]; e.target.value = ''
+  if (!f) return
+  try {
+    const { default: readXlsxFile } = await import('read-excel-file')
+    const data = await readXlsxFile(f), seen = new Set(), items = []
+    data.forEach((row, i) => {
+      const raw = String(row[0] ?? '').trim()
+      if (!raw || (i === 0 && ['nama', 'name', 'pemain', 'player'].includes(norm(raw))) || seen.has(norm(raw))) return
+      seen.add(norm(raw))
+      const m = findMatch(raw), level = LEVELS.find(l => l === String(row[1] ?? '').trim().toUpperCase()) || ''
+      const first = m.kind === 'exact' || m.kind === 'similar' ? m.cands[0] : null
+      items.push({ raw, level, kind: m.kind, cands: m.cands, sel: first ? (inGame(first.id) ? 'skip' : 'm:' + first.id) : 'new' })
+    })
+    if (!items.length) { msg.value = 'No names found. Put the names in column A of the first sheet.'; return }
+    impRows.value = items; showImp.value = true
+  } catch { msg.value = 'Could not read that file. Please use an .xlsx file with the names in column A.' }
+}
+async function doImport() { // in file order, so the first name in the sheet checks in first
+  busy.value = true; prog.value = 0
+  let n = parseInt(nextId()); const seen = new Set(rows.value.map(r => r.id))
+  try {
+    for (const it of impRows.value) {
+      if (it.sel === 'skip') continue
+      if (it.sel.startsWith('m:')) { const id = it.sel.slice(2); if (seen.has(id)) continue; await api('POST', S + '/players', { player_id: id }); seen.add(id) }
+      else if (mode.value === 'regular') { const id = String(n++).padStart(4, '0'); await api('POST', '/players', { id, nama: it.raw, initial_level: it.level }); await api('POST', S + '/players', { player_id: id }); seen.add(id) }
+      else await api('POST', S + '/guests', { nama: it.raw, level: it.level })
+      prog.value++
+    }
+    say(`${prog.value} players checked in`); showImp.value = false
+  } catch (e) { msg.value = e.message } finally { busy.value = false; await load() }
+}
 
 // ---------- share + live snapshot for viewers (names only) ----------
 async function share() {
@@ -168,7 +250,7 @@ const snap = () => ({ // what viewers see: names, live points, start time. No le
   next: upcoming.value.map(m => ({ t1: m.t1.map(p => p.nama), t2: m.t2.map(p => p.nama) })),
   avg: durs.value.length ? Math.round(durs.value.reduce((x, y) => x + y, 0) / durs.value.length) : 20, courts: courts.value,
 })
-watch(snap, v => { clearTimeout(liveT); liveT = setTimeout(() => api('PUT', S + '/live', v).catch(() => {}), 400) }, { immediate: true })
+watch(snap, v => { clearTimeout(liveT); liveT = setTimeout(() => api('PUT', S + '/live', v).catch(() => {}), 400) })
 
 // ---------- swipe carousel: Ongoing | Upcoming | History ----------
 function go(i) { idx.value = i; sw.value?.scrollTo({ left: i * sw.value.clientWidth, behavior: 'smooth' }) }
@@ -365,7 +447,10 @@ async function downloadBoard(b) { const a = document.createElement('a'); a.href 
       </details>
 
       <section class="card">
-        <div class="bar"><h2>Players</h2></div>
+        <div class="bar">
+          <h2>Players</h2>
+          <label class="btn">Import Excel<input type="file" accept=".xlsx" hidden @change="pickFile" /></label>
+        </div>
         <div class="addrow">
           <div class="combo">
             <input v-model="q" placeholder="Add player: type a name…" autocomplete="off" @focus="open = true" @blur="closeSoon" @keydown="onKey" />
@@ -417,6 +502,21 @@ async function downloadBoard(b) { const a = document.createElement('a'); a.href 
         <img :class="{ chk: lbStyle === 'transparent' }" :src="preview" alt="Leaderboard preview" />
       </div>
     </section>
+    <div v-if="showImp" class="modal" @click.self="!busy && (showImp = false)">
+      <div class="sheet">
+        <h2>Import players from Excel</h2>
+        <p class="empty" style="margin:0">{{ impRows.length }} names found (column A = name, optional column B = level). Check the rows marked "similar", then import. The first name in the sheet checks in first.</p>
+        <div v-for="(it, i) in impRows" :key="i" class="improw">
+          <div><span class="nm">{{ it.raw }}</span> <em class="tagk" :class="it.kind">{{ { exact: 'in master', similar: 'similar', multi: 'several matches', new: 'new' }[it.kind] }}</em></div>
+          <select v-model="it.sel">
+            <option v-for="c in it.cands" :key="c.id" :value="'m:' + c.id">Use {{ c.nama }} ({{ c.initial_level || '-' }}){{ inGame(c.id) ? ' · already in' : '' }}</option>
+            <option value="new">{{ mode === 'regular' ? 'Add as new player (saved to master)' : 'Add as guest (this game only)' }}</option>
+            <option value="skip">Skip</option>
+          </select>
+        </div>
+        <div class="acts"><button class="btn" :disabled="busy" @click="showImp = false">Cancel</button><button class="btn primary" :disabled="busy || !ready" @click="doImport">{{ busy ? `Importing ${prog}/${ready}…` : `Import ${ready} players` }}</button></div>
+      </div>
+    </div>
     <div v-if="toast" class="toast" role="status">{{ toast }}</div>
   </div>
 </template>

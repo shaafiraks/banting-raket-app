@@ -64,13 +64,18 @@ func rnd(n int) string { b := make([]byte, n); rand.Read(b); return hex.EncodeTo
 func guard(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := r.URL.Path
+		if strings.HasPrefix(p, "/api/") {
+			w.Header().Set("Cache-Control", "no-store") // never cache API answers
+			w.Header().Add("Vary", "Cookie")
+		}
 		if strings.HasPrefix(p, "/api/") && p != "/api/login" && !strings.HasPrefix(p, "/api/public/") {
 			c, err := r.Cookie("bt")
 			var n int
-			if err != nil || db.QueryRow(`SELECT 1 FROM auth_tokens WHERE token=$1 AND created_at > now() - interval '30 days'`, c.Value).Scan(&n) != nil {
+			if err != nil || db.QueryRow(`SELECT 1 FROM auth_tokens WHERE token=$1 AND created_at > now() - interval '7 days'`, c.Value).Scan(&n) != nil {
 				http.Error(w, "unauthorized", 401)
 				return
 			}
+			db.Exec(`UPDATE auth_tokens SET last_seen=now() WHERE token=$1 AND last_seen < now() - interval '1 minute'`, c.Value)
 		}
 		h.ServeHTTP(w, r)
 	})
@@ -235,8 +240,10 @@ func main() {
 			return
 		}
 		tok := rnd(32)
-		if _, err := db.Exec(`INSERT INTO auth_tokens(token,user_id) VALUES($1,$2)`, tok, id); err != nil { bad(w, err); return }
-		http.SetCookie(w, &http.Cookie{Name: "bt", Value: tok, Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: 30 * 86400,
+		ua := r.UserAgent()
+		if len(ua) > 200 { ua = ua[:200] }
+		if _, err := db.Exec(`INSERT INTO auth_tokens(token,user_id,ua) VALUES($1,$2,$3)`, tok, id, ua); err != nil { bad(w, err); return }
+		http.SetCookie(w, &http.Cookie{Name: "bt", Value: tok, Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: 7 * 86400,
 			Secure: r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"})
 		js(w, map[string]string{"username": b.Username})
 	})
@@ -289,6 +296,37 @@ func main() {
 			return map[string]any{"names": []string{nm(a), nm(b)}, "grp": g, "category": c}
 		}, sid)
 		js(w, map[string]any{"name": name, "play_date": d, "mode": mode, "live": json.RawMessage(live), "results": res, "teams": tm})
+	})
+	m.HandleFunc("GET /api/sessions/{sid}/state", func(w http.ResponseWriter, r *http.Request) {
+		var st string
+		var v int
+		if err := db.QueryRow(`SELECT state,state_v FROM sessions WHERE id=$1`, sidOf(r)).Scan(&st, &v); err != nil { http.Error(w, "not found", 404); return }
+		js(w, map[string]any{"v": v, "state": json.RawMessage(st)})
+	})
+	m.HandleFunc("PUT /api/sessions/{sid}/state", func(w http.ResponseWriter, r *http.Request) {
+		b, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<18))
+		if err != nil || !json.Valid(b) { http.Error(w, "bad json", 400); return }
+		var v int
+		if err := db.QueryRow(`UPDATE sessions SET state=$2,state_v=state_v+1 WHERE id=$1 RETURNING state_v`, sidOf(r), string(b)).Scan(&v); err != nil { bad(w, err); return }
+		js(w, map[string]int{"v": v})
+	})
+	m.HandleFunc("GET /api/devices", func(w http.ResponseWriter, r *http.Request) { // who is logged in right now
+		c, _ := r.Cookie("bt")
+		js(w, rowsOf(`SELECT substr(token,1,12),ua,to_char(created_at,'YYYY-MM-DD"T"HH24:MI:SS"Z"'),to_char(last_seen,'YYYY-MM-DD"T"HH24:MI:SS"Z"'),token=$1
+		  FROM auth_tokens WHERE user_id=(SELECT user_id FROM auth_tokens WHERE token=$1) ORDER BY last_seen DESC`, func(rs *sql.Rows) any {
+			var id, ua, cr, ls string
+			var me bool
+			rs.Scan(&id, &ua, &cr, &ls, &me)
+			return map[string]any{"id": id, "ua": ua, "created": cr, "last_seen": ls, "current": me}
+		}, c.Value))
+	})
+	m.HandleFunc("POST /api/devices/logout-others", func(w http.ResponseWriter, r *http.Request) {
+		c, _ := r.Cookie("bt")
+		do(w, `DELETE FROM auth_tokens WHERE token<>$1 AND user_id=(SELECT user_id FROM auth_tokens WHERE token=$1)`, c.Value)
+	})
+	m.HandleFunc("DELETE /api/devices/{id}", func(w http.ResponseWriter, r *http.Request) {
+		c, _ := r.Cookie("bt")
+		do(w, `DELETE FROM auth_tokens WHERE substr(token,1,12)=$1 AND user_id=(SELECT user_id FROM auth_tokens WHERE token=$2)`, r.PathValue("id"), c.Value)
 	})
 	m.Handle("/", http.FileServer(http.Dir("web")))
 
